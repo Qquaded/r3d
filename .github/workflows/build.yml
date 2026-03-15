@@ -1,0 +1,111 @@
+name: Build
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+    branches: ["main", "master"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.os-name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            os-name: Windows
+            cmake-args: >-
+              -DBUILD_SHARED_LIBS=ON
+              -DR3D_RAYLIB_VENDORED=ON
+              -DR3D_ASSIMP_VENDORED=ON
+            artifact-name: r3d-windows
+            artifact-path: build/bin/**/*.dll
+
+          - os: ubuntu-latest
+            os-name: Linux
+            cmake-args: >-
+              -DBUILD_SHARED_LIBS=ON
+              -DR3D_RAYLIB_VENDORED=ON
+              -DR3D_ASSIMP_VENDORED=ON
+            artifact-name: r3d-linux
+            artifact-path: build/lib/**/*.so*
+
+          - os: macos-latest
+            os-name: macOS
+            cmake-args: >-
+              -DBUILD_SHARED_LIBS=ON
+              -DR3D_RAYLIB_VENDORED=ON
+              -DR3D_ASSIMP_VENDORED=ON
+            artifact-name: r3d-macos
+            artifact-path: build/lib/**/*.dylib
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # ── Linux system dependencies ──────────────────────────────────────────
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y \
+            libgl1-mesa-dev \
+            libx11-dev \
+            libxrandr-dev \
+            libxinerama-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxext-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            libasound2-dev \
+            cmake \
+            ninja-build
+
+      # ── macOS system dependencies ──────────────────────────────────────────
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      # ── Windows: use MSVC via VS environment ───────────────────────────────
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          cmake -S . -B build ^
+            -G "Visual Studio 17 2022" -A x64 ^
+            ${{ matrix.cmake-args }} ^
+            -DR3D_BUILD_EXAMPLES=OFF ^
+            -DR3D_BUILD_DOCS=OFF
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: cmake --build build --config Release --parallel
+
+      # ── Linux / macOS: Ninja ───────────────────────────────────────────────
+      - name: Configure (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          cmake -S . -B build -G Ninja \
+            ${{ matrix.cmake-args }} \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DR3D_BUILD_EXAMPLES=OFF \
+            -DR3D_BUILD_DOCS=OFF
+
+      - name: Build (Unix)
+        if: runner.os != 'Windows'
+        run: cmake --build build --parallel
+
+      # ── Upload artifacts ───────────────────────────────────────────────────
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact-name }}
+          path: ${{ matrix.artifact-path }}
+          if-no-files-found: error
