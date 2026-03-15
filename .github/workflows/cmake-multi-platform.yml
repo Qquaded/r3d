@@ -1,234 +1,138 @@
-name: Multi-Platform Build
+name: Build
 
 on:
   push:
-    branches: [ "master" ]
-    paths:
-      - 'src/**'
-      - 'include/**'
-      - 'scripts/**'
-      - 'shaders/**'
-      - 'CMakeLists.txt'
-      - '**/CMakeLists.txt'
-      - '.github/workflows/**'
+    branches: ["main", "master"]
   pull_request:
-    branches: [ "master" ]
-    paths:
-      - 'src/**'
-      - 'include/**'
-      - 'scripts/**'
-      - 'shaders/**'
-      - 'CMakeLists.txt'
-      - '**/CMakeLists.txt'
-      - '.github/workflows/**'
+    branches: ["main", "master"]
   workflow_dispatch:
-    inputs:
-      trigger_bindings:
-        description: 'Trigger binding generation after build?'
-        required: true
-        type: boolean
-        default: false
 
 jobs:
   build:
+    name: ${{ matrix.os-name }}
     runs-on: ${{ matrix.os }}
-
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        build_type: [Release]
-        c_compiler: [gcc, clang, cl]
         include:
           - os: windows-latest
-            c_compiler: cl
-            cpp_compiler: cl
-          - os: windows-latest
-            c_compiler: gcc
-            cpp_compiler: g++
+            os-name: Windows
+            artifact-name: r3d-windows
+
           - os: ubuntu-latest
-            c_compiler: gcc
-            cpp_compiler: g++
-          - os: ubuntu-latest
-            c_compiler: clang
-            cpp_compiler: clang++
+            os-name: Linux
+            artifact-name: r3d-linux
+
           - os: macos-latest
-            c_compiler: gcc
-            cpp_compiler: g++
-          - os: macos-latest
-            c_compiler: clang
-            cpp_compiler: clang++
-        exclude:
-          - os: windows-latest
-            c_compiler: clang
-          - os: ubuntu-latest
-            c_compiler: cl
-          - os: macos-latest
-            c_compiler: cl
+            os-name: macOS
+            artifact-name: r3d-macos
 
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Setup ccache
-        uses: hendrikmuhs/ccache-action@v1.2
-        with:
-          key: ${{ matrix.os }}-${{ matrix.c_compiler }}-${{ matrix.build_type }}
-          max-size: 500M
-
-      - name: Install Ninja (Windows MSVC)
-        if: runner.os == 'Windows' && matrix.c_compiler == 'cl'
-        run: choco install ninja
-
-      - name: Setup MinGW-w64
-        if: runner.os == 'Windows' && matrix.c_compiler == 'gcc'
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: MINGW64
-          update: true
-          install: >-
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-cmake
-            mingw-w64-x86_64-ninja
-            mingw-w64-x86_64-python
-            mingw-w64-x86_64-ccache
-
+      # ── Linux system dependencies ──────────────────────────────────────────
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            ninja-build \
-            libglfw3 libglfw3-dev \
-            libx11-dev libxcursor-dev libxrandr-dev \
-            libxinerama-dev libxi-dev libxext-dev libxfixes-dev \
-            libwayland-dev libwayland-bin libxkbcommon-dev
+          sudo apt-get update -y
+          sudo apt-get install -y \
+            libgl1-mesa-dev \
+            libx11-dev \
+            libxrandr-dev \
+            libxinerama-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxext-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            libasound2-dev \
+            ninja-build
 
-      - name: Configure CMake (MinGW)
-        if: runner.os == 'Windows' && matrix.c_compiler == 'gcc'
-        shell: msys2 {0}
-        run: |
-          cmake -B build -G "Ninja" \
-            -DCMAKE_C_COMPILER=${{ matrix.c_compiler }} \
-            -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }} \
-            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DR3D_RAYLIB_VENDORED=ON \
-            -DR3D_ASSIMP_VENDORED=ON \
-            -DR3D_BUILD_EXAMPLES=ON \
-            -DR3D_BUILD_DOCS=OFF
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: brew install ninja
 
-      - name: Configure CMake (Windows MSVC)
-        if: runner.os == 'Windows' && matrix.c_compiler == 'cl'
+      # ── Configure ─────────────────────────────────────────────────────────
+      # Windows: -DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=ON is required so MSVC
+      # actually emits a DLL instead of just a static .lib. Without it,
+      # BUILD_SHARED_LIBS=ON still produces a .lib-only output for libraries
+      # that don't have explicit __declspec(dllexport) annotations everywhere.
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
         shell: cmd
         run: |
-          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-          cmake -B build -G "Ninja" ^
-            -DCMAKE_C_COMPILER=${{ matrix.c_compiler }} ^
-            -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }} ^
-            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} ^
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache ^
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache ^
-            -DCMAKE_CXX_FLAGS_INIT="/Brepro /Zc:inline" ^
-            -DCMAKE_C_FLAGS_INIT="/Brepro /Zc:inline" ^
-            -DBUILD_SHARED_LIBS=OFF ^
-            -DASSIMP_INSTALL_PDB=OFF ^
+          cmake -S . -B build ^
+            -G "Visual Studio 17 2022" -A x64 ^
+            -DBUILD_SHARED_LIBS=ON ^
+            -DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=ON ^
             -DR3D_RAYLIB_VENDORED=ON ^
             -DR3D_ASSIMP_VENDORED=ON ^
-            -DR3D_BUILD_EXAMPLES=ON ^
+            -DR3D_BUILD_EXAMPLES=OFF ^
             -DR3D_BUILD_DOCS=OFF
 
-      - name: Configure CMake (Linux/macOS)
-        if: runner.os == 'Linux' || runner.os == 'macOS'
+      - name: Configure (Unix)
+        if: runner.os != 'Windows'
         run: |
-          cmake -B build -G "Ninja" \
-            -DCMAKE_C_COMPILER=${{ matrix.c_compiler }} \
-            -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }} \
-            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DBUILD_SHARED_LIBS=OFF \
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=ON \
             -DR3D_RAYLIB_VENDORED=ON \
             -DR3D_ASSIMP_VENDORED=ON \
-            -DR3D_BUILD_EXAMPLES=ON \
+            -DR3D_BUILD_EXAMPLES=OFF \
             -DR3D_BUILD_DOCS=OFF
 
-      - name: Build (MinGW)
-        if: runner.os == 'Windows' && matrix.c_compiler == 'gcc'
-        shell: msys2 {0}
-        run: cmake --build build --config ${{ matrix.build_type }} --parallel
-
-      - name: Build (Windows MSVC)
-        if: runner.os == 'Windows' && matrix.c_compiler == 'cl'
+      # ── Build ──────────────────────────────────────────────────────────────
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
         shell: cmd
+        run: cmake --build build --config Release --parallel
+
+      - name: Build (Unix)
+        if: runner.os != 'Windows'
+        run: cmake --build build --parallel
+
+      # ── Debug: list everything produced ───────────────────────────────────
+      - name: List build outputs (Unix)
+        if: runner.os != 'Windows'
+        run: find build/bin build/lib -type f 2>/dev/null | sort || true
+
+      - name: List build outputs (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
         run: |
-          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-          cmake --build build --config ${{ matrix.build_type }} --parallel
+          Get-ChildItem -Recurse build/bin, build/lib -ErrorAction SilentlyContinue |
+            Where-Object { -not $_.PSIsContainer } |
+            Select-Object -ExpandProperty FullName
 
-      - name: Build (Linux/macOS)
-        if: runner.os == 'Linux' || runner.os == 'macOS'
-        run: cmake --build build --config ${{ matrix.build_type }} --parallel
-
-      - name: Print ccache statistics
-        run: ccache -s
-
-      - name: Run tests (MinGW)
-        if: runner.os == 'Windows' && matrix.c_compiler == 'gcc'
-        shell: msys2 {0}
-        run: |
-          cd build
-          ctest --build-config ${{ matrix.build_type }}
-
-      - name: Run tests (Windows MSVC)
-        if: runner.os == 'Windows' && matrix.c_compiler == 'cl'
-        shell: cmd
-        working-directory: build
-        run: ctest --build-config ${{ matrix.build_type }}
-
-      - name: Run tests (Linux/macOS)
-        if: runner.os == 'Linux' || runner.os == 'macOS'
-        working-directory: build
-        run: ctest --build-config ${{ matrix.build_type }}
-
-      - name: Upload artifacts
+      # ── Upload artifacts ───────────────────────────────────────────────────
+      # Windows: DLLs → build\bin\Release\   import libs → build\lib\Release\
+      - name: Upload artifacts (Windows)
+        if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
-          name: r3d-${{ matrix.os }}-${{ matrix.build_type }}-${{ matrix.c_compiler }}
+          name: ${{ matrix.artifact-name }}
           path: |
-            build/**/*.dll
-            build/**/*.so
-            build/**/*.a
-            build/**/*.lib
-            build/**/*.dylib
-          retention-days: 14
+            build/bin/Release/*.dll
+            build/lib/Release/*.lib
+          if-no-files-found: error
 
-  trigger-bindings:
-    needs: build
-    runs-on: ubuntu-latest
-    if: |
-      (github.event_name == 'push' && github.ref == 'refs/heads/master') ||
-      (github.event_name == 'workflow_dispatch' && inputs.trigger_bindings == true)
-
-    steps:
-      - name: Checkout code
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/checkout@v4
-
-      - name: Trigger binding generation
-        uses: peter-evans/repository-dispatch@v3
+      # Linux: shared objects → build/lib/
+      - name: Upload artifacts (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
         with:
-          token: ${{ secrets.BINDGEN_PAT }}
-          repository: Bigfoot71/r3d-odin-bindgen
-          event-type: r3d-updated
-          client-payload: |
-            {
-              "ref": "${{ github.ref }}",
-              "sha": "${{ github.sha }}",
-              "repository": "${{ github.repository }}",
-              "commit_message": ${{ toJSON(github.event_name == 'push' && github.event.head_commit.message || github.event.head_commit.message) }},
-              "run_id": "${{ github.run_id }}"
-            }
+          name: ${{ matrix.artifact-name }}
+          path: build/lib/*.so*
+          if-no-files-found: error
+
+      # macOS: dylibs → build/lib/
+      - name: Upload artifacts (macOS)
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact-name }}
+          path: build/lib/*.dylib
+          if-no-files-found: error
