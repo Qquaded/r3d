@@ -1,0 +1,56 @@
+--- src/modules/r3d_render.c
++++ src/modules/r3d_render.c
+@@ -754,9 +754,10 @@
+
+             uint64_t hash = 0;
+             if (call->type == R3D_RENDER_CALL_MESH && !group->skinTexture && !r3d_render_has_instances(group)) {
+                 hash = call->mesh.instance.vao;
+-                hash ^= (uint64_t)(uintptr_t)call->mesh.material.shader;
+-                hash ^= (uint64_t)(uintptr_t)call->mesh.material.albedo.texture.id;
++                uint64_t matHash = r3d_hash_fnv1a_64(&call->mesh.material, sizeof(R3D_Material));
++                hash ^= matHash;
+             }
+
+             items[i].callIdx = callIdx;
+@@ -778,7 +779,9 @@
+             if (count > 1) {
+                 if (R3D_MOD_RENDER.numAutoInstances >= R3D_MOD_RENDER.capacityAutoInstances) {
++                    int oldCap = R3D_MOD_RENDER.capacityAutoInstances;
+                     int newCap = R3D_MOD_RENDER.capacityAutoInstances == 0 ? 16 : R3D_MOD_RENDER.capacityAutoInstances * 2;
+                     R3D_MOD_RENDER.autoInstances = RL_REALLOC(R3D_MOD_RENDER.autoInstances, newCap * sizeof(R3D_InstanceBuffer));
++                    memset(R3D_MOD_RENDER.autoInstances + oldCap, 0, (newCap - oldCap) * sizeof(R3D_InstanceBuffer));
+                     R3D_MOD_RENDER.capacityAutoInstances = newCap;
+                 }
+
+@@ -806,17 +809,20 @@
+                     colors[k] = WHITE;
+
+                     BoundingBox meshAabb = R3D_MOD_RENDER.calls[callIdx].mesh.instance.aabb;
+-                    r3d_oriented_box_t obb = r3d_compute_obb(meshAabb, mat);
+-                    BoundingBox grpAabb = {
+-                        Vector3Subtract(obb.center, obb.halfExtents),
+-                        Vector3Add(obb.center, obb.halfExtents)
++                    Vector3 corners[8] = {
++                        {meshAabb.min.x, meshAabb.min.y, meshAabb.min.z},
++                        {meshAabb.max.x, meshAabb.min.y, meshAabb.min.z},
++                        {meshAabb.min.x, meshAabb.max.y, meshAabb.min.z},
++                        {meshAabb.max.x, meshAabb.max.y, meshAabb.min.z},
++                        {meshAabb.min.x, meshAabb.min.y, meshAabb.max.z},
++                        {meshAabb.max.x, meshAabb.min.y, meshAabb.max.z},
++                        {meshAabb.min.x, meshAabb.max.y, meshAabb.max.z},
++                        {meshAabb.max.x, meshAabb.max.y, meshAabb.max.z}
+                     };
+-
+-                    if (firstAabb) { combinedAabb = grpAabb; firstAabb = false; }
+-                    else {
+-                        combinedAabb.min = Vector3Min(combinedAabb.min, grpAabb.min);
+-                        combinedAabb.max = Vector3Max(combinedAabb.max, grpAabb.max);
++                    for (int c = 0; c < 8; c++) {
++                        Vector3 pt = r3d_vector3_transform(corners[c], &mat);
++                        if (firstAabb && c == 0) { combinedAabb.min = pt; combinedAabb.max = pt; firstAabb = false; }
++                        else {
++                            combinedAabb.min = Vector3Min(combinedAabb.min, pt);
++                            combinedAabb.max = Vector3Max(combinedAabb.max, pt);
++                        }
+                     }
+                 }

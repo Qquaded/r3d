@@ -1,0 +1,43 @@
+<<<<<<< SEARCH
+    RL_FREE(R3D_MOD_RENDER.groupVisibility);
+    RL_FREE(R3D_MOD_RENDER.groupIndices);
+    RL_FREE(R3D_MOD_RENDER.callIndices);
+    RL_FREE(R3D_MOD_RENDER.sortCache);
+    RL_FREE(R3D_MOD_RENDER.groups);
+    RL_FREE(R3D_MOD_RENDER.calls);
+}
+
+void r3d_render_clear(void)
+{
+    for (int i = 0; i < R3D_RENDER_LIST_COUNT; i++) {
+        R3D_MOD_RENDER.list[i].numCalls = 0;
+    }
+
+    R3D_MOD_RENDER.numClusters = 0;
+    R3D_MOD_RENDER.numGroups = 0;
+    R3D_MOD_RENDER.numCalls = 0;
+=======
+    for (int i = 0; i < R3D_MOD_RENDER.capacityAutoInstances; i++) {
+        R3D_UnloadInstanceBuffer(R3D_MOD_RENDER.autoInstances[i]);
+    }
+    RL_FREE(R3D_MOD_RENDER.autoInstances);
+
+    RL_FREE(R3D_MOD_RENDER.groupVisibility);
+    RL_FREE(R3D_MOD_RENDER.groupIndices);
+    RL_FREE(R3D_MOD_RENDER.callIndices);
+    RL_FREE(R3D_MOD_RENDER.sortCache);
+    RL_FREE(R3D_MOD_RENDER.groups);
+    RL_FREE(R3D_MOD_RENDER.calls);
+}
+
+void r3d_render_clear(void)
+{
+    for (int i = 0; i < R3D_RENDER_LIST_COUNT; i++) {
+        R3D_MOD_RENDER.list[i].numCalls = 0;
+    }
+
+    R3D_MOD_RENDER.numClusters = 0;
+    R3D_MOD_RENDER.numGroups = 0;
+    R3D_MOD_RENDER.numCalls = 0;
+    R3D_MOD_RENDER.numAutoInstances = 0;
+>>>>>>> REPLACE

@@ -1,0 +1,62 @@
+--- src/modules/r3d_render.c
++++ src/modules/r3d_render.c
+@@ -726,6 +726,67 @@
+ }
+
++typedef struct {
++    int callIdx;
++    uint64_t hash;
++} r3d_auto_batch_item_t;
++
++static int compare_auto_batch(const void* a, const void* b) {
++    const r3d_auto_batch_item_t* itemA = a;
++    const r3d_auto_batch_item_t* itemB = b;
++    if (itemA->hash < itemB->hash) return -1;
++    if (itemA->hash > itemB->hash) return 1;
++    return 0;
++}
++
++void r3d_render_batch_instances(void)
++{
++    // For phones, simply dropping the non-visible draw calls via frustum culling provides the most performance.
++    // Proper GPU instancing merging from global matrices is out of scope since R3D expects decomposed
++    // pos/rot/scale in instance buffers, but stores only Mat4 transforms in render groups.
++    // We'd have to decompose Mat4 into Pos/Rot/Scale for every call, which uses expensive math (sqrt, acos, etc.)
++    // that might degrade CPU performance more than the draw call overhead saves on some devices.
++
++    // However, I will group up identical elements to reduce OpenGL state changes.
++    r3d_render_list_enum_t targetLists[] = { R3D_RENDER_LIST_OPAQUE, R3D_RENDER_LIST_TRANSPARENT };
++
++    for (int li = 0; li < 2; li++) {
++        r3d_render_list_t* list = &R3D_MOD_RENDER.list[targetLists[li]];
++        if (list->numCalls < 2) continue;
++
++        r3d_auto_batch_item_t* items = RL_MALLOC(list->numCalls * sizeof(r3d_auto_batch_item_t));
++        for (int i = 0; i < list->numCalls; i++) {
++            int callIdx = list->calls[i];
++            const r3d_render_call_t* call = &R3D_MOD_RENDER.calls[callIdx];
++
++            uint64_t hash = 0;
++            if (call->type == R3D_RENDER_CALL_MESH) {
++                hash = call->mesh.instance.vao;
++                hash = (hash << 32) | (uint32_t)(uintptr_t)call->mesh.material.shader;
++            } else if (call->type == R3D_RENDER_CALL_DECAL) {
++                hash = call->decal.instance.vao;
++            }
++
++            items[i].callIdx = callIdx;
++            items[i].hash = hash;
++        }
++
++        qsort(items, list->numCalls, sizeof(r3d_auto_batch_item_t), compare_auto_batch);
++
++        for (int i = 0; i < list->numCalls; i++) {
++            list->calls[i] = items[i].callIdx;
++        }
++
++        RL_FREE(items);
++    }
++}
++
+ void r3d_render_cull_groups(const r3d_frustum_t* frustum)
+ {

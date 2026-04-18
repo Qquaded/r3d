@@ -594,6 +594,13 @@ void r3d_render_quit(void)
         RL_FREE(R3D_MOD_RENDER.list[i].calls);
     }
 
+    for (int i = 0; i < R3D_MOD_RENDER.capacityAutoInstances; i++) {
+        if (R3D_MOD_RENDER.autoInstances[i].capacity > 0) {
+            R3D_UnloadInstanceBuffer(R3D_MOD_RENDER.autoInstances[i]);
+        }
+    }
+    RL_FREE(R3D_MOD_RENDER.autoInstances);
+
     RL_FREE(R3D_MOD_RENDER.groupVisibility);
     RL_FREE(R3D_MOD_RENDER.groupIndices);
     RL_FREE(R3D_MOD_RENDER.callIndices);
@@ -611,6 +618,7 @@ void r3d_render_clear(void)
     R3D_MOD_RENDER.numClusters = 0;
     R3D_MOD_RENDER.numGroups = 0;
     R3D_MOD_RENDER.numCalls = 0;
+    R3D_MOD_RENDER.numAutoInstances = 0;
 
     R3D_MOD_RENDER.groupCulled = false;
     R3D_MOD_RENDER.hasDeferred = false;
@@ -715,6 +723,151 @@ r3d_render_group_t* r3d_render_get_call_group(const r3d_render_call_t* call)
     r3d_render_group_t* group = &R3D_MOD_RENDER.groups[groupIndex];
 
     return group;
+}
+
+typedef struct {
+    int callIdx;
+    uint64_t hash;
+} r3d_auto_batch_item_t;
+
+static int compare_auto_batch(const void* a, const void* b) {
+    const r3d_auto_batch_item_t* itemA = a;
+    const r3d_auto_batch_item_t* itemB = b;
+    if (itemA->hash < itemB->hash) return -1;
+    if (itemA->hash > itemB->hash) return 1;
+    return 0;
+}
+
+void r3d_render_batch_instances(void)
+{
+    r3d_render_list_enum_t targetLists[] = { R3D_RENDER_LIST_OPAQUE, R3D_RENDER_LIST_TRANSPARENT };
+
+    for (int li = 0; li < 2; li++) {
+        r3d_render_list_t* list = &R3D_MOD_RENDER.list[targetLists[li]];
+        if (list->numCalls < 2) continue;
+
+        r3d_auto_batch_item_t* items = RL_MALLOC(list->numCalls * sizeof(r3d_auto_batch_item_t));
+        for (int i = 0; i < list->numCalls; i++) {
+            int callIdx = list->calls[i];
+            const r3d_render_call_t* call = &R3D_MOD_RENDER.calls[callIdx];
+            r3d_render_group_t* group = r3d_render_get_call_group(call);
+
+            uint64_t hash = 0;
+            if (call->type == R3D_RENDER_CALL_MESH && !group->skinTexture && !r3d_render_has_instances(group)) {
+                hash = call->mesh.instance.vao;
+                uint64_t matHash = r3d_hash_fnv1a_64(&call->mesh.material, sizeof(R3D_Material));
+                hash ^= matHash;
+            }
+
+            items[i].callIdx = callIdx;
+            items[i].hash = hash;
+        }
+
+        qsort(items, list->numCalls, sizeof(r3d_auto_batch_item_t), compare_auto_batch);
+
+        int newListNumCalls = 0;
+        int* newListCalls = RL_MALLOC(list->numCalls * sizeof(int));
+
+        for (int i = 0; i < list->numCalls; ) {
+            int j = i + 1;
+            while (j < list->numCalls && items[i].hash != 0 && items[i].hash == items[j].hash) {
+                j++;
+            }
+            int count = j - i;
+
+            if (count > 1) {
+                if (R3D_MOD_RENDER.numAutoInstances >= R3D_MOD_RENDER.capacityAutoInstances) {
+                    int oldCap = R3D_MOD_RENDER.capacityAutoInstances;
+                    int newCap = oldCap == 0 ? 16 : oldCap * 2;
+                    R3D_MOD_RENDER.autoInstances = RL_REALLOC(R3D_MOD_RENDER.autoInstances, newCap * sizeof(R3D_InstanceBuffer));
+                    memset(R3D_MOD_RENDER.autoInstances + oldCap, 0, (newCap - oldCap) * sizeof(R3D_InstanceBuffer));
+                    R3D_MOD_RENDER.capacityAutoInstances = newCap;
+                }
+
+                int instIdx = R3D_MOD_RENDER.numAutoInstances++;
+                R3D_InstanceBuffer* buffer = &R3D_MOD_RENDER.autoInstances[instIdx];
+                if (buffer->capacity < count) {
+                    if (buffer->capacity > 0) R3D_UnloadInstanceBuffer(*buffer);
+                    *buffer = R3D_LoadInstanceBuffer(count, R3D_INSTANCE_POSITION | R3D_INSTANCE_ROTATION | R3D_INSTANCE_SCALE | R3D_INSTANCE_COLOR);
+                }
+
+                Vector3* positions = R3D_MapInstances(*buffer, R3D_INSTANCE_POSITION);
+                Quaternion* rotations = R3D_MapInstances(*buffer, R3D_INSTANCE_ROTATION);
+                Vector3* scales = R3D_MapInstances(*buffer, R3D_INSTANCE_SCALE);
+                Color* colors = R3D_MapInstances(*buffer, R3D_INSTANCE_COLOR);
+
+                BoundingBox combinedAabb = {0};
+                bool firstAabb = true;
+
+                for (int k = 0; k < count; k++) {
+                    int callIdx = items[i + k].callIdx;
+                    r3d_render_group_t* grp = r3d_render_get_call_group(&R3D_MOD_RENDER.calls[callIdx]);
+                    Matrix mat = grp->transform;
+
+                    positions[k] = (Vector3){mat.m12, mat.m13, mat.m14};
+                    rotations[k] = QuaternionFromMatrix(mat);
+                    scales[k] = (Vector3){
+                        Vector3Length((Vector3){mat.m0, mat.m4, mat.m8}),
+                        Vector3Length((Vector3){mat.m1, mat.m5, mat.m9}),
+                        Vector3Length((Vector3){mat.m2, mat.m6, mat.m10})
+                    };
+                    colors[k] = WHITE;
+
+                    BoundingBox meshAabb = R3D_MOD_RENDER.calls[callIdx].mesh.instance.aabb;
+
+                    Vector3 corners[8] = {
+                        {meshAabb.min.x, meshAabb.min.y, meshAabb.min.z},
+                        {meshAabb.max.x, meshAabb.min.y, meshAabb.min.z},
+                        {meshAabb.min.x, meshAabb.max.y, meshAabb.min.z},
+                        {meshAabb.max.x, meshAabb.max.y, meshAabb.min.z},
+                        {meshAabb.min.x, meshAabb.min.y, meshAabb.max.z},
+                        {meshAabb.max.x, meshAabb.min.y, meshAabb.max.z},
+                        {meshAabb.min.x, meshAabb.max.y, meshAabb.max.z},
+                        {meshAabb.max.x, meshAabb.max.y, meshAabb.max.z}
+                    };
+
+                    for (int c = 0; c < 8; c++) {
+                        Vector3 pt = r3d_vector3_transform(corners[c], &mat);
+                        if (firstAabb && c == 0) {
+                            combinedAabb.min = pt;
+                            combinedAabb.max = pt;
+                            firstAabb = false;
+                        } else {
+                            combinedAabb.min = Vector3Min(combinedAabb.min, pt);
+                            combinedAabb.max = Vector3Max(combinedAabb.max, pt);
+                        }
+                    }
+                }
+
+                R3D_UnmapInstances(*buffer, R3D_INSTANCE_POSITION | R3D_INSTANCE_ROTATION | R3D_INSTANCE_SCALE | R3D_INSTANCE_COLOR);
+
+                r3d_render_group_t instGroup = {0};
+                instGroup.transform = MatrixIdentity();
+                instGroup.instances = *buffer;
+                instGroup.instanceOffset = 0;
+                instGroup.instanceCount = count;
+                instGroup.obb = r3d_compute_obb(combinedAabb, MatrixIdentity());
+
+                int activeClusterBackup = R3D_MOD_RENDER.activeCluster;
+                R3D_MOD_RENDER.activeCluster = R3D_MOD_RENDER.groupVisibility[R3D_MOD_RENDER.groupIndices[items[i].callIdx]].clusterIndex;
+                r3d_render_group_push(&instGroup);
+                R3D_MOD_RENDER.activeCluster = activeClusterBackup;
+
+                r3d_render_call_t instCall = R3D_MOD_RENDER.calls[items[i].callIdx];
+                r3d_render_call_push(&instCall);
+            } else {
+                for (int k = 0; k < count; k++) {
+                    newListCalls[newListNumCalls++] = items[i + k].callIdx;
+                }
+            }
+            i = j;
+        }
+
+        RL_FREE(items);
+        memcpy(list->calls, newListCalls, newListNumCalls * sizeof(int));
+        list->numCalls = newListNumCalls;
+        RL_FREE(newListCalls);
+    }
 }
 
 void r3d_render_cull_groups(const r3d_frustum_t* frustum)

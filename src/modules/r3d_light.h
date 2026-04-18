@@ -22,11 +22,7 @@
 // MODULE CONSTANTS
 // ========================================
 
-static const int R3D_LIGHT_SHADOW_SIZE[] = {
-    [R3D_LIGHT_DIR]  = R3D_SHADOW_MAP_DIRECTIONAL_SIZE,
-    [R3D_LIGHT_SPOT] = R3D_SHADOW_MAP_SPOT_SIZE,
-    [R3D_LIGHT_OMNI] = R3D_SHADOW_MAP_OMNI_SIZE,
-};
+extern int R3D_LIGHT_SHADOW_SIZE[R3D_LIGHT_TYPE_COUNT];
 
 // ========================================
 // HELPER MACROS
@@ -163,6 +159,9 @@ void r3d_light_shadow_bind_fbo(R3D_LightType type, int layer, int face);
 
 /* Get a shadow map array texture ID */
 GLuint r3d_light_shadow_get(R3D_LightType type);
+
+/* Resizes the shadow map array for a given light type */
+bool r3d_light_set_shadow_resolution(R3D_LightType type, int size);
 
 // ========================================
 // INLINE QUERIES

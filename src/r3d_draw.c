@@ -158,8 +158,9 @@ void R3D_End(void)
         if (hasVisibleProbes) pass_scene_probes(); // Must have the IBL bind in case of ambient map
     }
 
-    /* --- Cull groups and sort all draw calls before rendering --- */
+    /* --- Batch and cull groups and sort all draw calls before rendering --- */
 
+    r3d_render_batch_instances();
     r3d_render_cull_groups(&R3D.viewState.frustum);
 
     r3d_render_sort_list(R3D_RENDER_LIST_OPAQUE, R3D.viewState.camera.position, R3D_RENDER_SORT_FRONT_TO_BACK);

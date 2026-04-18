@@ -430,6 +430,16 @@ R3DAPI void R3D_DisableShadow(R3D_Light id);
 R3DAPI bool R3D_IsShadowEnabled(R3D_Light id);
 
 /**
+ * @brief Sets the global resolution for shadow maps of a specific light type.
+ *
+ * This function resizes the shadow map array for all lights of the given type.
+ *
+ * @param type The type of light (e.g., R3D_LIGHT_DIR, R3D_LIGHT_SPOT).
+ * @param size The new resolution for the shadow map (must be power of 2, e.g., 1024, 2048).
+ */
+R3DAPI void R3D_SetShadowMapResolution(R3D_LightType type, int size);
+
+/**
  * @brief Gets the shadow map update mode of a light.
  *
  * This function retrieves the current mode for updating the shadow map of a light. The mode can be:

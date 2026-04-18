@@ -14,6 +14,12 @@
 #include <assert.h>
 #include <float.h>
 
+int R3D_LIGHT_SHADOW_SIZE[R3D_LIGHT_TYPE_COUNT] = {
+    [R3D_LIGHT_DIR]  = R3D_SHADOW_MAP_DIRECTIONAL_SIZE,
+    [R3D_LIGHT_SPOT] = R3D_SHADOW_MAP_SPOT_SIZE,
+    [R3D_LIGHT_OMNI] = R3D_SHADOW_MAP_OMNI_SIZE,
+};
+
 // ========================================
 // CONSTANTS
 // ========================================
@@ -301,7 +307,7 @@ static void update_light_dir_matrix(r3d_light_t* light, r3d_camera_t camera)
     Vector3 lightRight = Vector3Normalize(Vector3CrossProduct(up, lightDir));
     Vector3 lightUp = Vector3CrossProduct(lightDir, lightRight);
 
-    float texelSize = (radius * 2.0f) / R3D_SHADOW_MAP_DIRECTIONAL_SIZE;
+    float texelSize = (radius * 2.0f) / R3D_LIGHT_SHADOW_SIZE[R3D_LIGHT_DIR];
     float cx = floorf(Vector3DotProduct(frustumCenter, lightRight) / texelSize) * texelSize;
     float cy = floorf(Vector3DotProduct(frustumCenter, lightUp) / texelSize) * texelSize;
     float cz = Vector3DotProduct(frustumCenter, lightDir);
@@ -714,4 +720,31 @@ void r3d_light_shadow_bind_fbo(R3D_LightType type, int layer, int face)
 GLuint r3d_light_shadow_get(R3D_LightType type)
 {
     return R3D_MOD_LIGHT.shadowArrays[type];
+}
+
+bool r3d_light_set_shadow_resolution(R3D_LightType type, int size)
+{
+    if (size <= 0) return false;
+
+    r3d_light_shadow_pool_t* pool = &R3D_MOD_LIGHT.shadowPools[type];
+    GLuint* shadowArray = &R3D_MOD_LIGHT.shadowArrays[type];
+    GLenum shadowTarget = SHADOW_TEXTURE_TARGET[type];
+
+    if (!resize_shadow_array(shadowArray, shadowTarget, size, pool->totalLayers, pool->totalLayers)) {
+        return false;
+    }
+
+    R3D_LIGHT_SHADOW_SIZE[type] = size;
+
+    // Force update of all shadows of this type
+    r3d_light_array_t* validLights = &R3D_MOD_LIGHT.arrays[R3D_LIGHT_ARRAY_VALID];
+    for (int i = 0; i < validLights->count; i++) {
+        R3D_Light index = validLights->lights[i];
+        r3d_light_t* light = &R3D_MOD_LIGHT.lights[index];
+        if (light->type == type && light->shadowLayer >= 0) {
+            light->state.shadowShouldBeUpdated = true;
+        }
+    }
+
+    return true;
 }

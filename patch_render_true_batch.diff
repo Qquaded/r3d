@@ -1,0 +1,138 @@
+--- src/modules/r3d_render.c
++++ src/modules/r3d_render.c
+@@ -737,45 +737,96 @@
+
+ void r3d_render_batch_instances(void)
+ {
+-    r3d_render_list_enum_t targetLists[] = { R3D_RENDER_LIST_OPAQUE, R3D_RENDER_LIST_TRANSPARENT };
++    r3d_render_list_enum_t targetLists[] = { R3D_RENDER_LIST_OPAQUE, R3D_RENDER_LIST_TRANSPARENT };
++    r3d_render_list_enum_t instLists[] = { R3D_RENDER_LIST_OPAQUE_INST, R3D_RENDER_LIST_TRANSPARENT_INST };
+
+     for (int li = 0; li < 2; li++) {
+         r3d_render_list_t* list = &R3D_MOD_RENDER.list[targetLists[li]];
++        r3d_render_list_t* instList = &R3D_MOD_RENDER.list[instLists[li]];
+         if (list->numCalls < 2) continue;
+
+         r3d_auto_batch_item_t* items = RL_MALLOC(list->numCalls * sizeof(r3d_auto_batch_item_t));
+         for (int i = 0; i < list->numCalls; i++) {
+             int callIdx = list->calls[i];
+             const r3d_render_call_t* call = &R3D_MOD_RENDER.calls[callIdx];
++            r3d_render_group_t* group = r3d_render_get_call_group(call);
+
+             uint64_t hash = 0;
+-            if (call->type == R3D_RENDER_CALL_MESH && !group->skinTexture && !r3d_render_has_instances(group)) {
++            if (call->type == R3D_RENDER_CALL_MESH && !group->skinTexture && !r3d_render_has_instances(group)) {
+                 hash = call->mesh.instance.vao;
+                 hash ^= (uint64_t)(uintptr_t)call->mesh.material.shader;
+                 hash ^= (uint64_t)(uintptr_t)call->mesh.material.albedo.texture.id;
+             }
+
+             items[i].callIdx = callIdx;
+             items[i].hash = hash;
+         }
+
+         qsort(items, list->numCalls, sizeof(r3d_auto_batch_item_t), compare_auto_batch);
+
+         int newListNumCalls = 0;
+         int* newListCalls = RL_MALLOC(list->numCalls * sizeof(int));
+
+         for (int i = 0; i < list->numCalls; ) {
+             int j = i + 1;
+             while (j < list->numCalls && items[i].hash != 0 && items[i].hash == items[j].hash) {
+                 j++;
+             }
+             int count = j - i;
+
+             if (count > 1) {
+-                // Perform GPU Auto-Instancing
+                 if (R3D_MOD_RENDER.numAutoInstances >= R3D_MOD_RENDER.capacityAutoInstances) {
+                     int newCap = R3D_MOD_RENDER.capacityAutoInstances == 0 ? 16 : R3D_MOD_RENDER.capacityAutoInstances * 2;
+                     R3D_MOD_RENDER.autoInstances = RL_REALLOC(R3D_MOD_RENDER.autoInstances, newCap * sizeof(R3D_InstanceBuffer));
+                     R3D_MOD_RENDER.capacityAutoInstances = newCap;
+                 }
+
+                 int instIdx = R3D_MOD_RENDER.numAutoInstances++;
+                 R3D_InstanceBuffer* buffer = &R3D_MOD_RENDER.autoInstances[instIdx];
+                 if (buffer->capacity < count) {
+                     if (buffer->capacity > 0) R3D_UnloadInstanceBuffer(*buffer);
+-                    *buffer = R3D_LoadInstanceBuffer(count, R3D_INSTANCE_POSITION | R3D_INSTANCE_ROTATION | R3D_INSTANCE_SCALE);
++                    *buffer = R3D_LoadInstanceBuffer(count, R3D_INSTANCE_POSITION | R3D_INSTANCE_ROTATION | R3D_INSTANCE_SCALE | R3D_INSTANCE_COLOR);
+                 }
+
+                 Vector3* positions = R3D_MapInstances(*buffer, R3D_INSTANCE_POSITION);
+                 Quaternion* rotations = R3D_MapInstances(*buffer, R3D_INSTANCE_ROTATION);
+                 Vector3* scales = R3D_MapInstances(*buffer, R3D_INSTANCE_SCALE);
++                Color* colors = R3D_MapInstances(*buffer, R3D_INSTANCE_COLOR);
+
++                BoundingBox combinedAabb = {0};
++                bool firstAabb = true;
++
+                 for (int k = 0; k < count; k++) {
+                     int callIdx = items[i + k].callIdx;
+                     r3d_render_group_t* grp = r3d_render_get_call_group(&R3D_MOD_RENDER.calls[callIdx]);
+                     Matrix mat = grp->transform;
+
+                     positions[k] = (Vector3){mat.m12, mat.m13, mat.m14};
+                     rotations[k] = QuaternionFromMatrix(mat);
+                     scales[k] = (Vector3){
+                         Vector3Length((Vector3){mat.m0, mat.m4, mat.m8}),
+                         Vector3Length((Vector3){mat.m1, mat.m5, mat.m9}),
+                         Vector3Length((Vector3){mat.m2, mat.m6, mat.m10})
+                     };
++                    colors[k] = WHITE;
++
++                    BoundingBox meshAabb = R3D_MOD_RENDER.calls[callIdx].mesh.instance.aabb;
++                    r3d_oriented_box_t obb = r3d_compute_obb(meshAabb, mat);
++                    BoundingBox grpAabb = {
++                        Vector3Subtract(obb.center, obb.halfExtents),
++                        Vector3Add(obb.center, obb.halfExtents)
++                    };
++
++                    if (firstAabb) { combinedAabb = grpAabb; firstAabb = false; }
++                    else {
++                        combinedAabb.min = Vector3Min(combinedAabb.min, grpAabb.min);
++                        combinedAabb.max = Vector3Max(combinedAabb.max, grpAabb.max);
++                    }
+                 }
+
+-                R3D_UnmapInstances(*buffer, R3D_INSTANCE_POSITION | R3D_INSTANCE_ROTATION | R3D_INSTANCE_SCALE);
++                R3D_UnmapInstances(*buffer, R3D_INSTANCE_POSITION | R3D_INSTANCE_ROTATION | R3D_INSTANCE_SCALE | R3D_INSTANCE_COLOR);
+
+                 r3d_render_group_t instGroup = {0};
+                 instGroup.transform = MatrixIdentity();
+                 instGroup.instances = *buffer;
+                 instGroup.instanceOffset = 0;
+                 instGroup.instanceCount = count;
+
+-                // Combine AABBs
+-                BoundingBox aabb = { .min = {FLT_MAX, FLT_MAX, FLT_MAX}, .max = {-FLT_MAX, -FLT_MAX, -FLT_MAX} };
+-                for (int k = 0; k < count; k++) {
+-                    r3d_render_group_t* grp = r3d_render_get_call_group(&R3D_MOD_RENDER.calls[items[i+k].callIdx]);
+-                    if (grp->obb.aabb.min.x < aabb.min.x) aabb.min.x = grp->obb.aabb.min.x;
+-                    if (grp->obb.aabb.min.y < aabb.min.y) aabb.min.y = grp->obb.aabb.min.y;
+-                    if (grp->obb.aabb.min.z < aabb.min.z) aabb.min.z = grp->obb.aabb.min.z;
+-                    if (grp->obb.aabb.max.x > aabb.max.x) aabb.max.x = grp->obb.aabb.max.x;
+-                    if (grp->obb.aabb.max.y > aabb.max.y) aabb.max.y = grp->obb.aabb.max.y;
+-                    if (grp->obb.aabb.max.z > aabb.max.z) aabb.max.z = grp->obb.aabb.max.z;
+-                }
+-                instGroup.obb.aabb = aabb;
++                instGroup.obb = r3d_compute_obb(combinedAabb, MatrixIdentity());
+
+                 int activeClusterBackup = R3D_MOD_RENDER.activeCluster;
+                 R3D_MOD_RENDER.activeCluster = R3D_MOD_RENDER.groupVisibility[R3D_MOD_RENDER.groupIndices[items[i].callIdx]].clusterIndex;
+                 r3d_render_group_push(&instGroup);
+                 R3D_MOD_RENDER.activeCluster = activeClusterBackup;
+
+                 r3d_render_call_t instCall = R3D_MOD_RENDER.calls[items[i].callIdx];
+-                r3d_render_call_push(&instCall);
++                int instListIdx = instList->numCalls++;
++
++                int newCallIdx = R3D_MOD_RENDER.numCalls - 1; // Since we pushed it
++                // Wait, r3d_render_call_push will put it in the regular list, not the instList.
++                // Actually r3d_render_call_push determines the list based on r3d_render_has_instances(group)
++                // Since we pushed instGroup which has instances, r3d_render_call_push will automatically
++                // put it into the correct _INST list!
++                r3d_render_call_push(&instCall);
+             } else {
+                 for (int k = 0; k < count; k++) {
+                     newListCalls[newListNumCalls++] = items[i + k].callIdx;

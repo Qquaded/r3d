@@ -278,6 +278,13 @@ bool R3D_IsShadowEnabled(R3D_Light id)
     return light->shadowLayer >= 0;
 }
 
+void R3D_SetShadowMapResolution(R3D_LightType type, int size)
+{
+    if (!r3d_light_set_shadow_resolution(type, size)) {
+        R3D_TRACELOG(LOG_WARNING, "Failed to set shadow map resolution for light type %i", type);
+    }
+}
+
 R3D_ShadowUpdateMode R3D_GetShadowUpdateMode(R3D_Light id)
 {
     GET_LIGHT_OR_RETURN(light, id, 0);

@@ -284,6 +284,10 @@ extern struct r3d_mod_render {
     r3d_render_call_t* calls;                           //< Array of draw calls
     int* groupIndices;                                  //< Array of group indices for each draw call (automatically managed)
 
+    R3D_InstanceBuffer* autoInstances;                  //< Dynamically allocated instance buffers for auto-batching
+    int numAutoInstances;                               //< Number of active auto-instancing buffers
+    int capacityAutoInstances;                          //< Capacity of the auto-instancing buffers array
+
     int numClusters;                                    //< Number of active render clusters
     int numGroups;                                      //< Number of active render groups
     int numCalls;                                       //< Number of active draw calls
@@ -316,6 +320,12 @@ void r3d_render_quit(void);
  * Clear all render lists and reset the draw call buffer for the next frame.
  */
 void r3d_render_clear(void);
+
+/*
+ * Groups identical single draw calls into auto-instanced groups for better performance.
+ * Called at the start of R3D_End().
+ */
+void r3d_render_batch_instances(void);
 
 /*
  * Begins a new render cluster with the given bounds.
