@@ -550,7 +550,7 @@ static inline char* r3d_rshade_write_varyings(char* outPtr, const char* inout, r
                 varyings[i].qualifier, inout, varyings[i].type, varyings[i].name);
         }
         else {
-            outPtr += sprintf(outPtr, "smooth %s %s %s;\n",  
+            outPtr += sprintf(outPtr, "%s %s %s;\n",  
                 inout, varyings[i].type, varyings[i].name);
         }
     }
